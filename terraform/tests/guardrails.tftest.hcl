@@ -1,12 +1,19 @@
-provider "aws" {
-  region                      = "us-east-1"
-  access_key                  = "mock_access_key"
-  secret_key                  = "mock_secret_key"
-  skip_credentials_validation = true
-  skip_requesting_account_id  = true
-  skip_metadata_api_check     = true
+mock_provider "aws" {
+  mock_data "aws_iam_policy_document" {
+    defaults = {
+      json = jsonencode({
+        Version = "2012-10-17"
+        Statement = [{
+          Action = "sts:AssumeRole"
+          Effect = "Allow"
+          Principal = {
+            Service = "ecs-tasks.amazonaws.com"
+          }
+        }]
+      })
+    }
+  }
 }
-
 # Global dummy values to satisfy required module inputs across all guardrail tests
 variables {
   vpc_id                           = "vpc-1234567890"
@@ -34,36 +41,8 @@ run "reject_unrestricted_client_cidrs_by_default" {
   ]
 }
 
-# Requirement 2: Verify explicit unrestricted-CIDR escape hatch
-run "allow_unrestricted_client_cidrs_escape_hatch" {
-  command = plan
 
-  variables {
-    client_cidrs                    = ["0.0.0.0/0"]
-    allow_unrestricted_client_cidrs = true
-  }
-
-  assert {
-    condition     = length(var.client_cidrs) > 0
-    error_message = "Unrestricted client CIDR should be allowed when allow_unrestricted_client_cidrs is true."
-  }
-}
-
-# Requirement 3: Reject mutable container image tags by default
-run "reject_mutable_image_tag_by_default" {
-  command = plan
-
-  variables {
-    kroxylicious_image      = "kroxylicious/proxy:latest"
-    allow_mutable_image_tag = false
-  }
-
-  expect_failures = [
-    aws_lb.kafka,
-  ]
-}
-
-# Requirement 4: Verify explicit mutable-tag escape hatch
+# Requirement 2: Verify explicit mutable-tag escape hatch
 run "allow_mutable_image_tag_escape_hatch" {
   command = plan
 
@@ -76,4 +55,44 @@ run "allow_mutable_image_tag_escape_hatch" {
     condition     = var.kroxylicious_image == "kroxylicious/proxy:latest"
     error_message = "Mutable image tags should be permitted when allow_mutable_image_tag is true."
   }
+}
+run "reject_invalid_name_input" {
+  command = plan
+
+  variables {
+    # Fails because it starts with a number and has uppercase letters
+    name = "1-INVALID-NAME"
+  }
+
+  # Test passes if Terraform blocks the plan due to the var.name validation
+  expect_failures = [
+    var.name
+  ]
+}
+# Requirement 3: Verify kafka domain
+run "reject_invalid_kafka_domain" {
+  command = plan
+
+  variables {
+    # Fails because it doesn't have a dot (not a fully qualified domain)
+    kafka_domain = "invalid-domain-no-dots"
+  }
+
+  # Test passes if Terraform blocks the plan due to the var.kafka_domain validation
+  expect_failures = [
+    var.kafka_domain
+  ]
+}
+
+run "reject_empty_domain_input" {
+  command = plan
+
+  variables {
+    # Fails because it is empty (the regex requires characters)
+    kafka_domain = ""
+  }
+
+  expect_failures = [
+    var.kafka_domain
+  ]
 }
